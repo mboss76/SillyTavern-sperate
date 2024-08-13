@@ -50,3 +50,5 @@ public/css/user.css
 /data
 /default/scaffold
 public/scripts/extensions/third-party
+.vs/
+.vscode/
