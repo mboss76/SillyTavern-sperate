@@ -159,12 +159,16 @@ app.use(helmet({
 app.use(compression());
 app.use(responseTime());
 
-const server_port = cliArguments.port ?? process.env.SILLY_TAVERN_PORT ?? getConfigValue('port', DEFAULT_PORT);
+let server_port = cliArguments.port ?? process.env.SILLY_TAVERN_PORT ?? getConfigValue('port', DEFAULT_PORT);
+// 从 process.argv 中获取端口号参数
+server_port= process.argv[2]?process.argv[2]:server_port
+
 const autorun = (cliArguments.autorun ?? getConfigValue('autorun', DEFAULT_AUTORUN)) && !cliArguments.ssl;
 const listen = cliArguments.listen ?? getConfigValue('listen', DEFAULT_LISTEN);
 const enableCorsProxy = cliArguments.corsProxy ?? getConfigValue('enableCorsProxy', DEFAULT_CORS_PROXY);
 const enableWhitelist = cliArguments.whitelist ?? getConfigValue('whitelistMode', DEFAULT_WHITELIST);
-const dataRoot = cliArguments.dataRoot ?? getConfigValue('dataRoot', './data');
+const defaultDataRoot = cliArguments.dataRoot ?? getConfigValue('dataRoot', './data');
+let dataRoot=defaultDataRoot
 const disableCsrf = cliArguments.disableCsrf ?? getConfigValue('disableCsrfProtection', DEFAULT_CSRF_DISABLED);
 const basicAuthMode = cliArguments.basicAuthMode ?? getConfigValue('basicAuthMode', DEFAULT_BASIC_AUTH);
 const enableAccounts = getConfigValue('enableUserAccounts', DEFAULT_ACCOUNTS);
@@ -207,6 +211,7 @@ app.use(CORS);
 if (listen && basicAuthMode) app.use(basicAuthMiddleware);
 
 app.use(whitelistMiddleware(enableWhitelist, listen));
+app.use(resolveSingleVisitor);
 
 if (enableCorsProxy) {
     const bodyParser = require('body-parser');
@@ -901,10 +906,87 @@ async function verifySecuritySettings() {
     }
 }
 
-// User storage module needs to be initialized before starting the server
-userModule.initUserStorage(dataRoot)
-    .then(userModule.ensurePublicDirectoriesExist)
-    .then(userModule.migrateUserData)
-    .then(verifySecuritySettings)
-    .then(preSetupTasks)
-    .finally(startServer);
+
+// 大量并发请求可能会同时触发初始化操作，所以需要加锁
+const initializingSet=new Set()
+async function resolveSingleVisitor(request, response, next){
+    try{
+        if(listen && basicAuthMode){
+            const credentials=getVisitorCredentials(request)
+            const curDataRoot=path.join(defaultDataRoot, credentials)
+
+            //console.log('resolveSingleVisitor dataRoot',curDataRoot)
+
+            // 用户数据分离需要校验是否需要新建数据,如果需要进入循环获取锁
+            if(userModule.shouldUserStorageInit(curDataRoot)|| curDataRoot!==dataRoot){
+
+                console.log('get lock',curDataRoot)
+                //循环获取初始化锁,5次循环限制防止死循环
+                let times=5
+                while (initializingSet.has(credentials)&&times>0){
+                    await new Promise(resolve => setTimeout(resolve, (Math.random()*0.1+0.2)*1000));
+                    console.log('time',times)
+                    times-=1
+                }
+                console.log('start init',curDataRoot)
+                // 再次判断是否需要生成数据，避免重复生成
+                if(userModule.shouldUserStorageInit(curDataRoot) || curDataRoot!==dataRoot){
+                    dataRoot=curDataRoot
+                    initializingSet.add(credentials)
+                    await initVisitorData()
+                        .finally(()=>{
+                            initializingSet.delete(credentials)
+                            console.log(`dataRoot ${curDataRoot} init success`)
+                        })
+                }
+            }
+        }else{
+            dataRoot=defaultDataRoot
+        }
+        next()
+    }catch (error){
+        console.log(color.red('resolveSingleVisitor error'),error)
+        initializingSet.clear()
+        next(error)
+    }
+
+}
+
+const getVisitorCredentials=function (request){
+    const authHeader = request.headers.authorization;
+    const [scheme, credentials] = authHeader.split(' ');
+    return credentials
+}
+/**
+ * 初始化用户数据
+ * @returns {Promise<void>}
+ */
+const initVisitorData = async function (){
+    userModule.clearUserDirections()
+    userModule.initUserStorage(dataRoot)
+        .then(userModule.ensurePublicDirectoriesExist)
+        .then(userModule.migrateUserData)
+        .then(verifySecuritySettings)
+        .then(preSetupTasks)
+}
+
+/**
+ * 校验是否监听和登陆
+ * 如果需要登陆，不进行用户数据初始化
+ * 如果不需要登录，走default-user,进行用户数据初始化
+ */
+if(listen && basicAuthMode){
+    console.log(color.yellow('no initUserStorage'))
+    startServer()
+}else{
+    // User storage module needs to be initialized before starting the server
+    userModule.initUserStorage(dataRoot)
+        .then(userModule.ensurePublicDirectoriesExist)
+        .then(userModule.migrateUserData)
+        .then(verifySecuritySettings)
+        .then(preSetupTasks)
+        .finally(startServer);
+}
+
+
+

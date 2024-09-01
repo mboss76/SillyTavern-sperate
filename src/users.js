@@ -85,6 +85,46 @@ const STORAGE_KEYS = {
  */
 
 /**
+ * 清空内存中用户数据，单例数据在初始化时需先做清除
+ */
+function clearUserDirections(){
+    DIRECTORIES_CACHE.clear()
+}
+
+
+/**
+ * 判断是否需要进行用户文件初始化
+ * 有用户文件夹就不用进行初始化
+ * @param dataRoot
+ */
+function shouldUserStorageInit(dataRoot){
+    const storageDir=path.join(dataRoot,'_storage')
+    return isDirectoryEmpty(storageDir)
+}
+
+function isDirectoryEmpty(directoryPath) {
+    try {
+        // 使用 readdirSync 方法读取目录内容
+        const files = fs.readdirSync(directoryPath);
+
+        // 过滤文件夹里的隐藏文件 (如. 或 ..)
+        const visibleFiles = files.filter(file => !file.startsWith('.'));
+
+        // 判断过滤后的结果是否为空
+        return visibleFiles.length === 0;
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            console.error('目录不存在:', directoryPath);
+        } else {
+            console.error('读取目录时出错:', error);
+        }
+        return false;
+    }
+}
+
+
+
+/**
  * Ensures that the content directories exist.
  * @returns {Promise<import('./users').UserDirectoryList[]>} - The list of user directories
  */
@@ -735,4 +775,6 @@ module.exports = {
     getAllUsers,
     getAllEnabledUsers,
     router,
+    shouldUserStorageInit,
+    clearUserDirections
 };
