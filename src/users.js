@@ -20,12 +20,6 @@ const ENABLE_ACCOUNTS = getConfigValue('enableUserAccounts', false);
 const ANON_CSRF_SECRET = crypto.randomBytes(64).toString('base64');
 
 /**
- * The root directory for user data.
- * @type {string}
- */
-let DATA_ROOT = './data';
-
-/**
  * Cache for user directories.
  * @type {Map<string, UserDirectoryList>}
  */
@@ -138,7 +132,7 @@ async function migrateUserData() {
 
     console.log();
     console.log(color.magenta('Preparing to migrate user data...'));
-    console.log(`All public data will be moved to the ${DATA_ROOT} directory.`);
+    console.log(`All public data will be moved to the ${global.DATA_ROOT} directory.`);
     console.log('This process may take a while depending on the amount of data to move.');
     console.log(`Backups will be placed in the ${PUBLIC_DIRECTORIES.backups} directory.`);
     console.log(`The process will start in ${TIMEOUT} seconds. Press Ctrl+C to cancel.`);
@@ -352,12 +346,11 @@ function toAvatarKey(handle) {
  * @returns {Promise<void>}
  */
 async function initUserStorage(dataRoot) {
-    DIRECTORIES_CACHE.clear()
-    DATA_ROOT = dataRoot;
-    console.log('Using data root:', color.green(DATA_ROOT));
+    global.DATA_ROOT = dataRoot;
+    console.log('Using data root:', color.green(global.DATA_ROOT));
     console.log();
     await storage.init({
-        dir: path.join(DATA_ROOT, '_storage'),
+        dir: path.join(global.DATA_ROOT, '_storage'),
         ttl: false, // Never expire
     });
 
@@ -439,7 +432,6 @@ function getCsrfSecret(request) {
  */
 async function getAllUserHandles() {
     const keys = await storage.keys(x => x.key.startsWith(KEY_PREFIX));
-    //console.log('getAllUserHandles keys',keys)
     const handles = keys.map(x => x.replace(KEY_PREFIX, ''));
     return handles;
 }
@@ -459,42 +451,11 @@ function getUserDirectories(handle) {
 
     const directories = structuredClone(USER_DIRECTORY_TEMPLATE);
     for (const key in directories) {
-        directories[key] = path.join(DATA_ROOT, handle, USER_DIRECTORY_TEMPLATE[key]);
+        directories[key] = path.join(global.DATA_ROOT, handle, USER_DIRECTORY_TEMPLATE[key]);
     }
     DIRECTORIES_CACHE.set(handle, directories);
     return directories;
 }
-
-/**
- * 判断是否需要进行用户文件初始化
- * 有用户文件夹就不用进行初始化
- * @param dataRoot
- */
-function shouldUserStorageInit(dataRoot){
-    const storageDir=path.join(dataRoot,'_storage')
-    return isDirectoryEmpty(storageDir)
-}
-
-function isDirectoryEmpty(directoryPath) {
-    try {
-        // 使用 readdirSync 方法读取目录内容
-        const files = fs.readdirSync(directoryPath);
-
-        // 过滤文件夹里的隐藏文件 (如. 或 ..)
-        const visibleFiles = files.filter(file => !file.startsWith('.'));
-
-        // 判断过滤后的结果是否为空
-        return visibleFiles.length === 0;
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            console.error('目录不存在:', directoryPath);
-        } else {
-            console.error('读取目录时出错:', error);
-        }
-        return false;
-    }
-}
-
 
 /**
  * Gets the avatar URL for the provided user.
@@ -773,6 +734,5 @@ module.exports = {
     tryAutoLogin,
     getAllUsers,
     getAllEnabledUsers,
-    shouldUserStorageInit,
     router,
 };

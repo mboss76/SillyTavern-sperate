@@ -23,9 +23,6 @@ const multer = require('multer');
 const responseTime = require('response-time');
 const helmet = require('helmet').default;
 
-
-
-
 // net related library imports
 const net = require('net');
 const dns = require('dns');
@@ -46,6 +43,8 @@ const {
     getConfigValue,
     color,
     forwardFetchResponse,
+    removeColorFormatting,
+    getSeparator,
 } = require('./src/util');
 const { ensureThumbnailCache } = require('./src/endpoints/thumbnails');
 
@@ -57,9 +56,6 @@ if (process.versions && process.versions.node && process.versions.node.match(/20
     if (net.setDefaultAutoSelectFamily) net.setDefaultAutoSelectFamily(false);
 }
 
-// Set default DNS resolution order to IPv4 first
-dns.setDefaultResultOrder('ipv4first');
-
 const DEFAULT_PORT = 8000;
 const DEFAULT_AUTORUN = false;
 const DEFAULT_LISTEN = false;
@@ -69,16 +65,46 @@ const DEFAULT_ACCOUNTS = false;
 const DEFAULT_CSRF_DISABLED = false;
 const DEFAULT_BASIC_AUTH = false;
 
+const DEFAULT_ENABLE_IPV6 = false;
+const DEFAULT_ENABLE_IPV4 = true;
+
+const DEFAULT_PREFER_IPV6 = false;
+
+const DEFAULT_AVOID_LOCALHOST = false;
+
+const DEFAULT_AUTORUN_HOSTNAME = 'auto';
+const DEFAULT_AUTORUN_PORT = -1;
+
 const cliArguments = yargs(hideBin(process.argv))
     .usage('Usage: <your-start-script> <command> [options]')
-    .option('port', {
+    .option('enableIPv6', {
+        type: 'boolean',
+        default: null,
+        describe: `Enables IPv6.\n[config default: ${DEFAULT_ENABLE_IPV6}]`,
+    }).option('enableIPv4', {
+        type: 'boolean',
+        default: null,
+        describe: `Enables IPv4.\n[config default: ${DEFAULT_ENABLE_IPV4}]`,
+    }).option('port', {
         type: 'number',
         default: null,
         describe: `Sets the port under which SillyTavern will run.\nIf not provided falls back to yaml config 'port'.\n[config default: ${DEFAULT_PORT}]`,
+    }).option('dnsPreferIPv6', {
+        type: 'boolean',
+        default: null,
+        describe: `Prefers IPv6 for dns\nyou should probably have the enabled if you're on an IPv6 only network\nIf not provided falls back to yaml config 'preferIPv6'.\n[config default: ${DEFAULT_PREFER_IPV6}]`,
     }).option('autorun', {
         type: 'boolean',
         default: null,
         describe: `Automatically launch SillyTavern in the browser.\nAutorun is automatically disabled if --ssl is set to true.\nIf not provided falls back to yaml config 'autorun'.\n[config default: ${DEFAULT_AUTORUN}]`,
+    }).option('autorunHostname', {
+        type: 'string',
+        default: null,
+        describe: 'the autorun hostname, probably best left on \'auto\'.\nuse values like \'localhost\', \'st.example.com\'',
+    }).option('autorunPortOverride', {
+        type: 'string',
+        default: null,
+        describe: 'Overrides the port for autorun with open your browser with this port and ignore what port the server is running on. -1 is use server port',
     }).option('listen', {
         type: 'boolean',
         default: null,
@@ -111,12 +137,15 @@ const cliArguments = yargs(hideBin(process.argv))
         type: 'string',
         default: null,
         describe: 'Root directory for data storage',
+    }).option('avoidLocalhost', {
+        type: 'boolean',
+        default: null,
+        describe: 'Avoids using \'localhost\' for autorun in auto mode.\nuse if you don\'t have \'localhost\' in your hosts file',
     }).option('basicAuthMode', {
         type: 'boolean',
         default: null,
         describe: 'Enables basic authentication',
     }).parseSync();
-cliArguments.ssl = undefined;
 
 // change all relative paths
 console.log(`Node version: ${process.version}. Running in ${process.env.NODE_ENV} environment.`);
@@ -130,19 +159,42 @@ app.use(helmet({
 app.use(compression());
 app.use(responseTime());
 
-let server_port = cliArguments.port ?? process.env.SILLY_TAVERN_PORT ?? getConfigValue('port', DEFAULT_PORT);
-// 从 process.argv 中获取端口号参数
-server_port= process.argv[2]?process.argv[2]:server_port
+const server_port = cliArguments.port ?? process.env.SILLY_TAVERN_PORT ?? getConfigValue('port', DEFAULT_PORT);
 const autorun = (cliArguments.autorun ?? getConfigValue('autorun', DEFAULT_AUTORUN)) && !cliArguments.ssl;
 const listen = cliArguments.listen ?? getConfigValue('listen', DEFAULT_LISTEN);
 const enableCorsProxy = cliArguments.corsProxy ?? getConfigValue('enableCorsProxy', DEFAULT_CORS_PROXY);
 const enableWhitelist = cliArguments.whitelist ?? getConfigValue('whitelistMode', DEFAULT_WHITELIST);
-const defaultDataRoot = cliArguments.dataRoot ?? getConfigValue('dataRoot', './data');
-let dataRoot=defaultDataRoot
+const dataRoot = cliArguments.dataRoot ?? getConfigValue('dataRoot', './data');
 const disableCsrf = cliArguments.disableCsrf ?? getConfigValue('disableCsrfProtection', DEFAULT_CSRF_DISABLED);
 const basicAuthMode = cliArguments.basicAuthMode ?? getConfigValue('basicAuthMode', DEFAULT_BASIC_AUTH);
 const enableAccounts = getConfigValue('enableUserAccounts', DEFAULT_ACCOUNTS);
+
 const uploadsPath = path.join(dataRoot, require('./src/constants').UPLOADS_DIRECTORY);
+
+const enableIPv6 = cliArguments.enableIPv6 ?? getConfigValue('protocol.ipv6', DEFAULT_ENABLE_IPV6);
+const enableIPv4 = cliArguments.enableIPv4 ?? getConfigValue('protocol.ipv4', DEFAULT_ENABLE_IPV4);
+
+const autorunHostname = cliArguments.autorunHostname ?? getConfigValue('autorunHostname', DEFAULT_AUTORUN_HOSTNAME);
+const autorunPortOverride = cliArguments.autorunPortOverride ?? getConfigValue('autorunPortOverride', DEFAULT_AUTORUN_PORT);
+
+const dnsPreferIPv6 = cliArguments.dnsPreferIPv6 ?? getConfigValue('dnsPreferIPv6', DEFAULT_PREFER_IPV6);
+
+const avoidLocalhost = cliArguments.avoidLocalhost ?? getConfigValue('avoidLocalhost', DEFAULT_AVOID_LOCALHOST);
+
+if (dnsPreferIPv6) {
+    // Set default DNS resolution order to IPv6 first
+    dns.setDefaultResultOrder('ipv6first');
+    console.log('Preferring IPv6 for DNS resolution');
+} else {
+    // Set default DNS resolution order to IPv4 first
+    dns.setDefaultResultOrder('ipv4first');
+    console.log('Preferring IPv4 for DNS resolution');
+}
+
+if (!enableIPv6 && !enableIPv4) {
+    console.error('error: You can\'t disable all internet protocols: at least IPv6 or IPv4 must be enabled.');
+    process.exit(1);
+}
 
 // CORS Settings //
 const CORS = cors({
@@ -155,8 +207,6 @@ app.use(CORS);
 if (listen && basicAuthMode) app.use(basicAuthMiddleware);
 
 app.use(whitelistMiddleware(enableWhitelist, listen));
-
-app.use(resolveSingleVisitor);
 
 if (enableCorsProxy) {
     const bodyParser = require('body-parser');
@@ -554,15 +604,15 @@ app.use('/api/speech', require('./src/endpoints/speech').router);
 // Azure TTS
 app.use('/api/azure', require('./src/endpoints/azure').router);
 
-const tavernUrl = new URL(
+const tavernUrlV6 = new URL(
     (cliArguments.ssl ? 'https://' : 'http://') +
-    (listen ? '0.0.0.0' : '127.0.0.1') +
+    (listen ? '[::]' : '[::1]') +
     (':' + server_port),
 );
 
-const autorunUrl = new URL(
+const tavernUrl = new URL(
     (cliArguments.ssl ? 'https://' : 'http://') +
-    ('127.0.0.1') +
+    (listen ? '0.0.0.0' : '127.0.0.1') +
     (':' + server_port),
 );
 
@@ -615,19 +665,67 @@ const preSetupTasks = async function () {
 };
 
 /**
- * Tasks that need to be run after the server starts listening.
+ * Gets the hostname to use for autorun in the browser.
+ * @returns {string} The hostname to use for autorun
  */
-const postSetupTasks = async function () {
+function getAutorunHostname() {
+    if (autorunHostname === 'auto') {
+        if (enableIPv6 && enableIPv4) {
+            if (avoidLocalhost) return '[::1]';
+            return 'localhost';
+        }
+
+        if (enableIPv6) {
+            return '[::1]';
+        }
+
+        if (enableIPv4) {
+            return '127.0.0.1';
+        }
+    }
+
+    return autorunHostname;
+}
+
+/**
+ * Tasks that need to be run after the server starts listening.
+ * @param {boolean} v6Failed If the server failed to start on IPv6
+ * @param {boolean} v4Failed If the server failed to start on IPv4
+ */
+const postSetupTasks = async function (v6Failed, v4Failed) {
+    const autorunUrl = new URL(
+        (cliArguments.ssl ? 'https://' : 'http://') +
+        (getAutorunHostname()) +
+        (':') +
+        ((autorunPortOverride >= 0) ? autorunPortOverride : server_port),
+    );
+
     console.log('Launching...');
 
     if (autorun) open(autorunUrl.toString());
 
     setWindowTitle('SillyTavern WebServer');
 
-    console.log(color.green('SillyTavern is listening on: ' + tavernUrl));
+    let logListen = 'SillyTavern is listening on';
+
+    if (enableIPv6 && !v6Failed) {
+        logListen += color.green(' IPv6: ' + tavernUrlV6.host);
+    }
+
+    if (enableIPv4 && !v4Failed) {
+        logListen += color.green(' IPv4: ' + tavernUrl.host);
+    }
+
+    const goToLog = 'Go to: ' + color.blue(autorunUrl) + ' to open SillyTavern';
+    const plainGoToLog = removeColorFormatting(goToLog);
+
+    console.log(logListen);
+    console.log('\n' + getSeparator(plainGoToLog.length) + '\n');
+    console.log(goToLog);
+    console.log('\n' + getSeparator(plainGoToLog.length) + '\n');
 
     if (listen) {
-        console.log('\n0.0.0.0 means SillyTavern is listening on all network interfaces (Wi-Fi, LAN, localhost). If you want to limit it only to internal localhost (127.0.0.1), change the setting in config.yaml to "listen: false". Check "access.log" file in the SillyTavern directory if you want to inspect incoming connections.\n');
+        console.log('[::] or 0.0.0.0 means SillyTavern is listening on all network interfaces (Wi-Fi, LAN, localhost). If you want to limit it only to internal localhost ([::1] or 127.0.0.1), change the setting in config.yaml to "listen: false". Check "access.log" file in the SillyTavern directory if you want to inspect incoming connections.\n');
     }
 
     if (basicAuthMode) {
@@ -682,6 +780,100 @@ function logSecurityAlert(message) {
     process.exit(1);
 }
 
+/**
+ * Handles the case where the server failed to start on one or both protocols.
+ * @param {boolean} v6Failed If the server failed to start on IPv6
+ * @param {boolean} v4Failed If the server failed to start on IPv4
+ */
+function handleServerListenFail(v6Failed, v4Failed) {
+    if (v6Failed && !enableIPv4) {
+        console.error(color.red('fatal error: Failed to start server on IPv6 and IPv4 disabled'));
+        process.exit(1);
+    }
+
+    if (v4Failed && !enableIPv6) {
+        console.error(color.red('fatal error: Failed to start server on IPv4 and IPv6 disabled'));
+        process.exit(1);
+    }
+
+    if (v6Failed && v4Failed) {
+        console.error(color.red('fatal error: Failed to start server on both IPv6 and IPv4'));
+        process.exit(1);
+    }
+}
+
+/**
+ * Creates an HTTPS server.
+ * @param {URL} url The URL to listen on
+ * @returns {Promise<void>} A promise that resolves when the server is listening
+ * @throws {Error} If the server fails to start
+ */
+function createHttpsServer(url) {
+    return new Promise((resolve, reject) => {
+        const server = https.createServer(
+            {
+                cert: fs.readFileSync(cliArguments.certPath),
+                key: fs.readFileSync(cliArguments.keyPath),
+            }, app);
+        server.on('error', reject);
+        server.on('listening', resolve);
+        server.listen(url.port || 443, url.hostname);
+    });
+}
+
+/**
+ * Creates an HTTP server.
+ * @param {URL} url The URL to listen on
+ * @returns {Promise<void>} A promise that resolves when the server is listening
+ * @throws {Error} If the server fails to start
+ */
+function createHttpServer(url) {
+    return new Promise((resolve, reject) => {
+        const server = http.createServer(app);
+        server.on('error', reject);
+        server.on('listening', resolve);
+        server.listen(url.port || 80, url.hostname);
+    });
+}
+
+async function startHTTPorHTTPS() {
+    let v6Failed = false;
+    let v4Failed = false;
+
+    const createFunc = cliArguments.ssl ? createHttpsServer : createHttpServer;
+
+    if (enableIPv6) {
+        try {
+            await createFunc(tavernUrlV6);
+        } catch (error) {
+            console.error('non-fatal error: failed to start server on IPv6');
+            console.error(error);
+
+            v6Failed = true;
+        }
+    }
+
+    if (enableIPv4) {
+        try {
+            await createFunc(tavernUrl);
+        } catch (error) {
+            console.error('non-fatal error: failed to start server on IPv4');
+            console.error(error);
+
+            v4Failed = true;
+        }
+    }
+
+    return [v6Failed, v4Failed];
+}
+
+async function startServer() {
+    const [v6Failed, v4Failed] = await startHTTPorHTTPS();
+
+    handleServerListenFail(v6Failed, v4Failed);
+    postSetupTasks(v6Failed, v4Failed);
+}
+
 async function verifySecuritySettings() {
     // Skip all security checks as listen is set to false
     if (!listen) {
@@ -708,113 +900,11 @@ async function verifySecuritySettings() {
         }
     }
 }
-// 大量并发请求可能会同时触发初始化操作，所以需要加锁
-const initializingSet=new Set()
-async function resolveSingleVisitor(request, response, next){
-    try{
-        if(listen && basicAuthMode){
-            const credentials=getVisitorCredentials(request)
-            const curDataRoot=path.join(defaultDataRoot, credentials)
 
-            //console.log('resolveSingleVisitor dataRoot',curDataRoot)
-
-            // 用户数据分离需要校验是否需要新建数据,如果需要进入循环获取锁
-            if(userModule.shouldUserStorageInit(curDataRoot)|| curDataRoot!==dataRoot){
-
-                console.log('get lock',curDataRoot)
-                //循环获取初始化锁,5次循环限制防止死循环
-                let times=5
-                while (initializingSet.has(credentials)&&times>0){
-                    await new Promise(resolve => setTimeout(resolve, (Math.random()*0.1+0.2)*1000));
-                    console.log('time',times)
-                    times-=1
-                }
-                console.log('start init',curDataRoot)
-                // 再次判断是否需要生成数据，避免重复生成
-                if(userModule.shouldUserStorageInit(curDataRoot) || curDataRoot!==dataRoot){
-                    dataRoot=curDataRoot
-                    initializingSet.add(credentials)
-                    await userModule.initUserStorage(curDataRoot)
-                        .then(userModule.ensurePublicDirectoriesExist)
-                        .then(userModule.migrateUserData)
-                        .then(verifySecuritySettings)
-                        .then(preSetupTasks)
-                        .finally(()=>{
-                            initializingSet.delete(credentials)
-                            console.log(`dataRoot ${curDataRoot} init success`)
-                        })
-                }
-            }
-        }else{
-            dataRoot=defaultDataRoot
-        }
-        next()
-    }catch (error){
-        console.log(color.red('resolveSingleVisitor error'),error)
-        initializingSet.clear()
-        next(error)
-    }
-
-}
-
-const getVisitorCredentials=function (request){
-    const authHeader = request.headers.authorization;
-    const [scheme, credentials] = authHeader.split(' ');
-    return credentials
-}
-
-/**
- * 校验是否监听和登陆
- * 如果需要登陆，不进行用户数据初始化
- * 如果不需要登录，走default-user,进行用户数据初始化
- */
-if (listen && basicAuthMode){
-    console.log(color.yellow('no initUserStorage'))
-    if (cliArguments.ssl) {
-        https.createServer(
-            {
-                cert: fs.readFileSync(cliArguments.certPath),
-                key: fs.readFileSync(cliArguments.keyPath),
-            }, app)
-            .listen(
-                Number(tavernUrl.port) || 443,
-                tavernUrl.hostname,
-                postSetupTasks,
-            );
-    } else {
-        http.createServer(app).listen(
-            Number(tavernUrl.port) || 80,
-            tavernUrl.hostname,
-            postSetupTasks,
-        );
-    }
-
-}else{
-    // User storage module needs to be initialized before starting the server
-    userModule.initUserStorage(dataRoot)
-        .then(userModule.ensurePublicDirectoriesExist)
-        .then(userModule.migrateUserData)
-        .then(verifySecuritySettings)
-        .then(preSetupTasks)
-        .finally(() => {
-            if (cliArguments.ssl) {
-                https.createServer(
-                    {
-                        cert: fs.readFileSync(cliArguments.certPath),
-                        key: fs.readFileSync(cliArguments.keyPath),
-                    }, app)
-                    .listen(
-                        Number(tavernUrl.port) || 443,
-                        tavernUrl.hostname,
-                        postSetupTasks,
-                    );
-            } else {
-                http.createServer(app).listen(
-                    Number(tavernUrl.port) || 80,
-                    tavernUrl.hostname,
-                    postSetupTasks,
-                );
-            }
-        });
-}
-
+// User storage module needs to be initialized before starting the server
+userModule.initUserStorage(dataRoot)
+    .then(userModule.ensurePublicDirectoriesExist)
+    .then(userModule.migrateUserData)
+    .then(verifySecuritySettings)
+    .then(preSetupTasks)
+    .finally(startServer);
