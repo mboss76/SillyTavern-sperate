@@ -464,10 +464,6 @@
         "type": "openai_preset"
     },
     {
-      "filename": "presets/openai/XHM-FinalV1.1-8.26.json",
-      "type": "openai_preset"
-    },
-    {
         "filename": "presets/context/Adventure.json",
         "type": "context"
     },
