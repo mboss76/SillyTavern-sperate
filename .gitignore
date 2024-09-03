@@ -1,5 +1,4 @@
 node_modules/
-data/
 public/chats/
 public/characters/
 public/User Avatars/
@@ -21,6 +20,7 @@ public/stats.json
 /uploads/
 *.jsonl
 /config.conf
+/config.yaml
 /config.conf.bak
 /docker/config
 /docker/user
@@ -49,5 +49,3 @@ public/css/user.css
 /data
 /default/scaffold
 public/scripts/extensions/third-party
-.vs/
-.vscode/
